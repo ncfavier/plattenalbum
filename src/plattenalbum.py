@@ -623,6 +623,8 @@ class Client(MPDClient):
 		return [Song(song) for song in super().plchanges(version)]
 	def lsinfo(self, uri):
 		return [Song(song) for song in super().lsinfo(uri)]
+	def listallinfo(self, uri):
+		return [Song(song) for song in super().listallinfo(uri)]
 	def listplaylistinfo(self, name):
 		return [Song(song) for song in super().listplaylistinfo(name)]
 	def update(self):
@@ -1514,6 +1516,11 @@ class SearchView(Gtk.Stack):
 	def _on_album_activate(self, list_box, row):
 		self.emit("album-selected", row.album, row.artist, row.date)
 
+class AllArtists(GObject.Object):
+	def __init__(self):
+		GObject.Object.__init__(self)
+		self.name="All"
+
 class Artist(GObject.Object):
 	def __init__(self, name):
 		GObject.Object.__init__(self)
@@ -1525,6 +1532,7 @@ class ArtistSelectionModel(SelectionModel):
 
 	def set_artists(self, artists):
 		self.clear()
+		self.append((AllArtists(),))
 		self.append((Artist(item[0]) for item in sorted(artists, key=lambda item: locale.strxfrm(item[1]))))
 
 	def select_artist(self, name):
@@ -1716,6 +1724,16 @@ class AlbumsPage(Adw.NavigationPage):
 		for album in albums:
 			yield Album(artist, album["album"], album["date"])
 
+	def _get_all_albums(self):
+		# MPD doesn't let us query albums sorted by last-modified, so we do it manually.
+		# This makes various assumptions, e.g. that songs don't have multiple artists/albums.
+		albums=dict(
+			map(lambda x: (x.get('album')[0], (x.get('albumartist', x.get('artist', ['']))[0], x.get('date', [''])[0])),
+			filter(lambda x: x.get('album') is not None,
+			sorted(self._client.listallinfo(''), key = lambda x: x.get('last-modified', ''), reverse=True)))).items()
+		for (album, (artist, date)) in albums:
+			yield Album(artist, album, date)
+
 	def display(self, artist):
 		self._settings.set_property("cursor-watch", True)
 		self._selection_model.clear()
@@ -1724,8 +1742,12 @@ class AlbumsPage(Adw.NavigationPage):
 		main=GLib.main_context_default()
 		while main.pending():
 			main.iteration()
-		self.update_property([Gtk.AccessibleProperty.LABEL], [_("Albums of {artist}").format(artist=artist)])
-		self._selection_model.append(sorted(self._get_albums(artist), key=lambda item: item.date))
+		if artist == "All":
+			self.update_property([Gtk.AccessibleProperty.LABEL], [_("All albums")])
+			self._selection_model.append(self._get_all_albums())
+		else:
+			self.update_property([Gtk.AccessibleProperty.LABEL], [_("Albums of {artist}").format(artist=artist)])
+			self._selection_model.append(sorted(self._get_albums(artist), key=lambda item: item.date))
 		self._settings.set_property("cursor-watch", False)
 
 	def _on_activate(self, widget, pos):
@@ -3184,4 +3206,3 @@ if __name__ == "__main__":
 	app=Plattenalbum()
 	signal.signal(signal.SIGINT, signal.SIG_DFL)  # allow using ctrl-c to terminate
 	app.run(sys.argv)
-
